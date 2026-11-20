@@ -1,0 +1,27 @@
+# The base image and the actions the workflows use. Actions follow the org's pinning rule (see
+# "Pinning actions" in https://github.com/cornucopia-machines/.github): GitHub's and Docker's own
+# follow their major tags, so Dependabot only proposes their new majors, and third-party actions
+# are pinned to a commit, so their updates come as one grouped PR a month. A week's cooldown lets a
+# compromised release get noticed and pulled before it's picked up; security updates ignore it.
+version: 2
+
+updates:
+  # A new Alpine release (alpine:3.x). Fixes within a release don't need a PR: every build runs
+  # `apk upgrade`.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns:
+          - '*'

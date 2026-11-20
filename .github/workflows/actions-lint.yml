@@ -1,0 +1,17 @@
+name: Actions lint
+
+# actionlint and zizmor over the workflows and actions, and shellcheck over the shell scripts, whenever a PR changes
+# them. The shared lint shellchecks every script in the repo, not only those under .github.
+on:
+  pull_request:
+    paths:
+      - .github/**
+      - "**.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    # Shared across the org's repos; see https://github.com/cornucopia-machines/.github.
+    uses: cornucopia-machines/.github/.github/workflows/actions-lint.yml@main

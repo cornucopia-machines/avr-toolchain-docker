@@ -1,0 +1,4 @@
+# DS-0002 (image user should not be root): the image is a build environment. GitHub Actions runs
+# `container:` jobs as the image's user, and actions/checkout and the build write to a workspace
+# owned by the runner, which only root can do there. Devcontainers map the user themselves.
+DS-0002

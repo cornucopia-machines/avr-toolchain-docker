@@ -1,0 +1,26 @@
+name: Image scan
+
+# Rescans the published image every week for vulnerabilities disclosed since it was built, and
+# keeps one `security` issue per fixable one, closed once `latest` no longer has it. The build
+# checks each image as it's built (see "Check image for vulnerabilities" in build.yml). A rebuild
+# (workflow_dispatch on Build) picks up Alpine's fixes.
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    permissions:
+      contents: read
+      packages: read
+      issues: write
+    # Shared across the org's repos; see https://github.com/cornucopia-machines/.github.
+    uses: cornucopia-machines/.github/.github/workflows/scheduled-image-scan.yml@main
+    with:
+      images: |
+        ghcr.io/cornucopia-machines/avr-toolchain:latest
+      pkg-types: apk
