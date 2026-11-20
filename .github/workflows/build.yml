@@ -1,18 +1,39 @@
-name: Build and push avr-toolchains Docker image
+name: Build
 
+# Builds the toolchain image on every pull request and push to main, checks it, and on main
+# publishes it to ghcr.io/cornucopia-machines/avr-toolchain as sha-<short-sha> (immutable; pin
+# consumers to its digest) and latest.
 on:
   push:
-    branches:
-      - 'main'
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
+# Read-only by default; jobs that need more ask for it themselves.
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/cornucopia-machines/avr-toolchain
+
 jobs:
-  build-and-push:
-    name: Build and push
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Needed to push the image to GHCR on main.
+      packages: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Security misconfigurations (secrets in ENV, ...); fails the build. .trivyignore says why
+      # the image runs as root.
+      - name: Check Dockerfile
+        uses: cornucopia-machines/.github/actions/trivy-config@main
+        with:
+          paths: Dockerfile
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -20,16 +41,76 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Log in to Docker Hub
+      # The runner's platform only, loaded into the local Docker for the checks below; a
+      # multi-platform build can't be loaded. No build cache: this is what gets published, so its
+      # packages are installed fresh (see "Caches" in cornucopia-machines/.github's README).
+      - name: Build image for checks
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          push: false
+          tags: avr-toolchain:ci
+
+      - name: Smoke test
+        env:
+          IMAGE: avr-toolchain:ci
+        run: .github/scripts/smoke-test.sh
+
+      # Syft's SBOM of the image: the Alpine packages, toolchain included.
+      - name: Generate SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: avr-toolchain:ci
+          format: cyclonedx-json
+          output-file: avr-toolchain.syft.cdx.json
+          syft-version: v1.57.2
+          upload-artifact: false
+          upload-release-assets: false
+
+      # Grype over that SBOM. Fixable findings fail the build: the Dockerfile upgrades every package
+      # to the Alpine release's latest, so a fixable one left over means the fix needs our action
+      # (a newer Alpine release, which Dependabot proposes), not just a rebuild. The weekly Image
+      # scan catches what's disclosed after the image is published.
+      - name: Check image for vulnerabilities
+        uses: cornucopia-machines/.github/actions/grype-scan@main
+        with:
+          targets: sbom:avr-toolchain.syft.cdx.json
+          pkg-types: apk
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v7
+        with:
+          name: avr-toolchain-sbom
+          path: avr-toolchain.syft.cdx.json
+
+      - name: Log in to GitHub Container Registry
+        if: github.ref == 'refs/heads/main'
         uses: docker/login-action@v4
         with:
+          registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Compute tags
+        id: tags
+        run: echo "short-sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      # Both platforms; pull requests build them without pushing, so an arm64-only failure shows
+      # up before merge. The amd64 image reuses the layers of the one checked above, from this
+      # job's own builder, so what's pushed is what was scanned. `sbom: true` attaches BuildKit's SBOM (generated with Syft) to each
+      # platform's image as an attestation, so the SBOM travels with the image and its digest:
+      # `docker buildx imagetools inspect <image> --format '{{ json .SBOM }}'` reads it back.
+      # Dependabot doesn't cover Alpine packages, so a dependency-graph submission would add
+      # nothing it can act on, and a build artifact expires.
       - name: Build and push image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ github.repository_owner }}/avr-toolchain:latest
+          push: ${{ github.ref == 'refs/heads/main' }}
+          sbom: true
+          provenance: mode=max
+          tags: |
+            ${{ env.IMAGE }}:sha-${{ steps.tags.outputs.short-sha }}
+            ${{ env.IMAGE }}:latest
